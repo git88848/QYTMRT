@@ -1,6 +1,6 @@
 """
 ====================================
-    趋于飞机批量举报工具 v1.0.0    
+    趋于飞机批量举报工具 v1.0.1    
 ====================================
 
 ✨ 功能简介
@@ -54,6 +54,7 @@ SOFTWARE.
 import asyncio
 import os
 import shutil
+import time
 
 from telethon import TelegramClient
 from telethon.tl.functions.account import ReportPeerRequest
@@ -61,91 +62,168 @@ from telethon.tl.types import *
 from telethon.tl.types import User
 
 sen_dir = "sessions"
+
+# 检查并创建sessions目录
+if not os.path.exists(sen_dir):
+    os.makedirs(sen_dir)
+    print(f"已创建 {sen_dir} 目录，请将您的 Telegram 会话文件放入此目录")
+    print("程序将在3秒后退出...")
+    time.sleep(3)
+    exit()
+
 reportReasons = ["虐待儿童", "版权问题", "虚假消息", "非法药物", "其他问题", "非法人员", "非法组织", "垃圾邮件",
                  "暴力行为"]
 
+async def get_user_input(prompt: str, timeout: int = 300) -> str:
+    """异步获取用户输入，带超时处理"""
+    print(prompt, end='', flush=True)
+    try:
+        return await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(None, input),
+            timeout=timeout
+        )
+    except asyncio.TimeoutError:
+        print("\n输入超时，程序将退出...")
+        raise
+
+async def report_task(session_path, account_name, report_user, report_type, reason_text, report_msg, report_count):
+    """单个举报任务的异步函数"""
+    client = None
+    try:
+        client = TelegramClient(session_path, 2040, "b18441a1ff607e10a989891a5462e627")
+        await client.connect()
+        
+        if not await client.is_user_authorized():
+            print(f"账号不可用：{account_name} 已请求删除此账号文件夹")
+            shutil.rmtree(os.path.dirname(session_path))
+            return False
+            
+        target_user = await client.get_entity(report_user)
+        if not isinstance(target_user, User):
+            print(f"账号 {account_name}: 目标不是有效用户")
+            return False
+            
+        target_peer = InputPeerUser(target_user.id, target_user.access_hash)
+        report_result = await client(ReportPeerRequest(
+            peer=target_peer,
+            reason=report_type,
+            message=report_msg
+        ))
+        
+        if report_result is True:
+            print(f"✅ 账号 {account_name} 成功举报用户 {report_user}")
+            print(f"   举报原因: {reason_text}")
+            print(f"   举报内容: {report_msg}")
+            return True
+        else:
+            print(f"❌ 账号 {account_name} 举报失败 - 服务器返回失败")
+            return False
+            
+    except Exception as e:
+        print(f"❌ 账号 {account_name} 举报异常:")
+        print(f"   错误信息: {str(e)}")
+        return False
+    finally:
+        if client:
+            await client.disconnect()
 
 async def main():
-    report_user = input("请输入要举报的用户名或ID:")
-    report_count = int(
-        input("请输入要举报的次数(可用账号数少于输入次数时将重复举报, 输入0时可用账号数有多少个就举报多少次):"))
-    for x in range(len(reportReasons)):
-        print(f"{x+1}:{reportReasons[x]}")
-    report_type = input("请选择举报原因：")
-    if report_type == "1":
-        report_type = InputReportReasonChildAbuse()
-    elif report_type == "2":
-        report_type = InputReportReasonCopyright()
-    elif report_type == "3":
-        report_type = InputReportReasonFake()
-    elif report_type == "4":
-        report_type = InputReportReasonIllegalDrugs()
-    elif report_type == "5":
-        report_type = InputReportReasonOther()
-    elif report_type == "6":
-        report_type = InputReportReasonPersonalDetails()
-    elif report_type == "7":
-        report_type = InputReportReasonPornography()
-    elif report_type == "8":
-        report_type = InputReportReasonSpam()
-    elif report_type == "9":
-        report_type = InputReportReasonViolence()
-    print(report_type)
-    report_msg = input("请输入举报内容：")
-    count = 0
-    # target_user = None
-    exit_flag = False
-    while not exit_flag:
+    try:
+        report_user = await get_user_input("请输入要举报的用户名或ID: ")
+        report_count = int(
+            await get_user_input("请输入要举报的次数(可用账号数少于输入次数时将重复举报, 输入0时可用账号数有多少个就举报多少次): "))
+        
+        print("\n举报原因选项:")
+        for x in range(len(reportReasons)):
+            print(f"{x+1}:{reportReasons[x]}")
+        report_type_input = await get_user_input("\n请选择举报原因(输入数字)：")
+        
+        # 创建举报原因实例并显示中文说明
+        report_type_map = {
+            "1": (InputReportReasonChildAbuse(), "虐待儿童"),
+            "2": (InputReportReasonCopyright(), "版权问题"),
+            "3": (InputReportReasonFake(), "虚假消息"),
+            "4": (InputReportReasonIllegalDrugs(), "非法药物"),
+            "5": (InputReportReasonOther(), "其他问题"),
+            "6": (InputReportReasonPersonalDetails(), "非法人员"),
+            "7": (InputReportReasonPornography(), "非法组织"),
+            "8": (InputReportReasonSpam(), "垃圾邮件"),
+            "9": (InputReportReasonViolence(), "暴力行为")
+        }
+        
+        if report_type_input not in report_type_map:
+            print("无效的选择，程序将退出...")
+            return
+            
+        report_type, reason_text = report_type_map[report_type_input]
+        print(f"\n已选择举报原因: {reason_text}")
+        
+        report_msg = await get_user_input("请输入举报内容：")
+        
+        success_count = 0
+        batch_size = 5  # 每批处理的任务数
+        
+        # 获取所有可用的会话文件
+        session_files = []
         for file in os.listdir(sen_dir):
             base_name, ext = os.path.splitext(file)
             is_dir = os.path.isdir(os.path.join(sen_dir + "/" + base_name))
-            if count == report_count and report_count != 0:
-                print(f"举报结束, 累计举报次数：{count}次, 已完成指定举报任务数")
-                exit_flag = True
-                break
+            
             if ext == ".session" or is_dir:
                 s_dir = sen_dir + "/" + base_name + ".session"
                 if is_dir:
                     s_dir = sen_dir + "/" + base_name + "/" + base_name + ".session"
-                client = TelegramClient(s_dir, 2040,
-                                        "b18441a1ff607e10a989891a5462e627")
-                await client.connect()
-                try:
-                    if await client.is_user_authorized() is False:
-                        print("账号不可用：" + base_name + "已请求删除此账号文件夹")
-                        await client.disconnect()
-                        shutil.rmtree(sen_dir + "/" + base_name)
-                        continue
-                    # if target_user is None:
-                    target_user = await client.get_entity(report_user)
-                    while isinstance(target_user, User) is False:
-                        report_user = input(
-                            "输入的用户名或ID (" + report_user + ") 不是一个正确的用户, 请重新输入要举报的用户名或ID:")
-                        target_user = await client.get_entity(report_user)
-                    target_peer = InputPeerUser(target_user.id, target_user.access_hash)
-                    report_result = await client(ReportPeerRequest(
-                        peer=target_peer,
-                        reason=report_type,
-                        message=report_msg
-                    ))
-                    if report_result is True:
-                        count += 1
-                        if report_count == 0:
-                            print(f"账号 {base_name} 已对 {report_user} 进行举报, 当前举报次数：{count}次")
-                        else:
-                            print(
-                                f"账号 {base_name} 已对 {report_user} 进行举报, 当前举报次数：{count}次, 需举报{report_count}次, "
-                                f"还剩{(report_count - count)}次")
-                    else:
-                        print(f"账号 {base_name} 对 {report_user} 举报失败!!!")
-                    await client.disconnect()
-                except Exception as e:
-                    print(f"{base_name} 举报出现异常：{str(e)}")
-                    await client.disconnect()
+                session_files.append((s_dir, base_name))
+        
+        if not session_files:
+            print("没有找到可用的会话文件！")
+            return
+            
+        # 处理所有会话文件，需要时重复使用
+        while True:
+            for i in range(0, len(session_files), batch_size):
+                if success_count == report_count and report_count != 0:
+                    break
+                    
+                # 获取当前批次的会话文件
+                batch = session_files[i:i + batch_size]
+                tasks = []
+                
+                for session_path, account_name in batch:
+                    task = report_task(
+                        session_path, account_name, report_user,
+                        report_type, reason_text, report_msg, report_count
+                    )
+                    tasks.append(task)
+                
+                # 执行当前批次的任务
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # 统计成功次数
+                batch_success = sum(1 for r in results if r is True)
+                success_count += batch_success
+                
+                # 显示进度
+                if report_count == 0:
+                    print(f"\n当前进度: 已成功 {success_count} 次")
+                else:
+                    remaining = report_count - success_count
+                    print(f"\n当前进度: {success_count}/{report_count} (还需{remaining}次)")
+                
+                # 批次间延迟
+                await asyncio.sleep(2)
+            
+            # 检查是否需要继续循环
+            if report_count == 0 or success_count >= report_count:
+                break
+            
+            print("\n已用完所有账号，开始重新使用账号继续举报...")
+            await asyncio.sleep(1)
+        
+        print(f"\n举报任务完成，总计成功举报 {success_count} 次")
+        
+    except Exception as e:
+        print(f"程序执行出错: {str(e)}")
 
-        if report_count == 0:
-            print(f"举报结束, 累计举报次数：{count}次, 本次举报次数为按可用账号数量进行举报")
-            break
-
-
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
