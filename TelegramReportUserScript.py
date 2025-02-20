@@ -128,102 +128,137 @@ async def report_task(session_path, account_name, report_user, report_type, reas
             await client.disconnect()
 
 async def main():
-    try:
-        report_user = await get_user_input("请输入要举报的用户名或ID: ")
-        report_count = int(
-            await get_user_input("请输入要举报的次数(可用账号数少于输入次数时将重复举报, 输入0时可用账号数有多少个就举报多少次): "))
-        
-        print("\n举报原因选项:")
-        for x in range(len(reportReasons)):
-            print(f"{x+1}:{reportReasons[x]}")
-        report_type_input = await get_user_input("\n请选择举报原因(输入数字)：")
-        
-        # 创建举报原因实例并显示中文说明
-        report_type_map = {
-            "1": (InputReportReasonChildAbuse(), "虐待儿童"),
-            "2": (InputReportReasonCopyright(), "版权问题"),
-            "3": (InputReportReasonFake(), "虚假消息"),
-            "4": (InputReportReasonIllegalDrugs(), "非法药物"),
-            "5": (InputReportReasonOther(), "其他问题"),
-            "6": (InputReportReasonPersonalDetails(), "非法人员"),
-            "7": (InputReportReasonPornography(), "非法组织"),
-            "8": (InputReportReasonSpam(), "垃圾邮件"),
-            "9": (InputReportReasonViolence(), "暴力行为")
-        }
-        
-        if report_type_input not in report_type_map:
-            print("无效的选择，程序将退出...")
-            return
+    # 创建举报原因实例并显示中文说明
+    report_type_map = {
+        "1": (InputReportReasonChildAbuse(), "虐待儿童"),
+        "2": (InputReportReasonCopyright(), "版权问题"),
+        "3": (InputReportReasonFake(), "虚假消息"),
+        "4": (InputReportReasonIllegalDrugs(), "非法药物"),
+        "5": (InputReportReasonOther(), "其他问题"),
+        "6": (InputReportReasonPersonalDetails(), "非法人员"),
+        "7": (InputReportReasonPornography(), "非法组织"),
+        "8": (InputReportReasonSpam(), "垃圾邮件"),
+        "9": (InputReportReasonViolence(), "暴力行为")
+    }
+
+    while True:  # 外层循环
+        try:
+            # 获取举报目标信息
+            if 'report_user' not in locals():  # 第一次运行或选择新用户时
+                report_user = await get_user_input("请输入要举报的用户名或ID: ")
+                # 获取举报类型
+                print("\n举报原因选项:")
+                for x in range(len(reportReasons)):
+                    print(f"{x+1}:{reportReasons[x]}")
+                report_type_input = await get_user_input("\n请选择举报原因(输入数字)：")
+                
+                if report_type_input not in report_type_map:
+                    print("无效的选择，程序将退出...")
+                    return
+                
+                report_type, reason_text = report_type_map[report_type_input]
+                print(f"\n已选择举报原因: {reason_text}")
             
-        report_type, reason_text = report_type_map[report_type_input]
-        print(f"\n已选择举报原因: {reason_text}")
-        
-        report_msg = await get_user_input("请输入举报内容：")
-        
-        success_count = 0
-        batch_size = 5  # 每批处理的任务数
-        
-        # 获取所有可用的会话文件
-        session_files = []
-        for file in os.listdir(sen_dir):
-            base_name, ext = os.path.splitext(file)
-            is_dir = os.path.isdir(os.path.join(sen_dir + "/" + base_name))
+            # 每次都需要输入的信息
+            report_count = int(await get_user_input("请输入要举报的次数: "))
+            report_msg = await get_user_input("请输入举报内容：")
             
-            if ext == ".session" or is_dir:
-                s_dir = sen_dir + "/" + base_name + ".session"
-                if is_dir:
-                    s_dir = sen_dir + "/" + base_name + "/" + base_name + ".session"
-                session_files.append((s_dir, base_name))
-        
-        if not session_files:
-            print("没有找到可用的会话文件！")
-            return
+            success_count = 0
+            batch_size = 5  # 每批处理的任务数
             
-        # 处理所有会话文件，需要时重复使用
-        while True:
-            for i in range(0, len(session_files), batch_size):
-                if success_count == report_count and report_count != 0:
-                    break
+            # 获取所有可用的会话文件
+            session_files = []
+            for file in os.listdir(sen_dir):
+                base_name, ext = os.path.splitext(file)
+                is_dir = os.path.isdir(os.path.join(sen_dir + "/" + base_name))
+                
+                if ext == ".session" or is_dir:
+                    s_dir = sen_dir + "/" + base_name + ".session"
+                    if is_dir:
+                        s_dir = sen_dir + "/" + base_name + "/" + base_name + ".session"
+                    session_files.append((s_dir, base_name))
+            
+            if not session_files:
+                print("没有找到可用的会话文件！")
+                return
+            
+            # 处理所有会话文件，需要时重复使用
+            while True:
+                for i in range(0, len(session_files), batch_size):
+                    if success_count == report_count and report_count != 0:
+                        break
                     
-                # 获取当前批次的会话文件
-                batch = session_files[i:i + batch_size]
-                tasks = []
+                    # 获取当前批次的会话文件
+                    batch = session_files[i:i + batch_size]
+                    tasks = []
+                    
+                    for session_path, account_name in batch:
+                        task = report_task(
+                            session_path, account_name, report_user,
+                            report_type, reason_text, report_msg, report_count
+                        )
+                        tasks.append(task)
+                    
+                    # 执行当前批次的任务
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    # 统计成功次数
+                    batch_success = sum(1 for r in results if r is True)
+                    success_count += batch_success
+                    
+                    # 显示进度
+                    if report_count == 0:
+                        print(f"\n当前进度: 已成功 {success_count} 次")
+                    else:
+                        remaining = report_count - success_count
+                        print(f"\n当前进度: {success_count}/{report_count} (还需{remaining}次)")
+                    
+                    # 批次间延迟
+                    await asyncio.sleep(2)
                 
-                for session_path, account_name in batch:
-                    task = report_task(
-                        session_path, account_name, report_user,
-                        report_type, reason_text, report_msg, report_count
-                    )
-                    tasks.append(task)
+                # 检查是否需要继续循环
+                if report_count == 0 or success_count >= report_count:
+                    break
                 
-                # 执行当前批次的任务
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                # 统计成功次数
-                batch_success = sum(1 for r in results if r is True)
-                success_count += batch_success
-                
-                # 显示进度
-                if report_count == 0:
-                    print(f"\n当前进度: 已成功 {success_count} 次")
-                else:
-                    remaining = report_count - success_count
-                    print(f"\n当前进度: {success_count}/{report_count} (还需{remaining}次)")
-                
-                # 批次间延迟
-                await asyncio.sleep(2)
+                print("\n已用完所有账号，开始重新使用账号继续举报...")
+                await asyncio.sleep(1)
             
-            # 检查是否需要继续循环
-            if report_count == 0 or success_count >= report_count:
+            # 举报完成后的选择
+            print(f"\n✨ 举报任务完成，总计成功举报 {success_count} 次")
+            print("\n" + "="*50)
+            print("💡 您可以选择:")
+            print("1. ⭐ 继续举报当前用户")
+            print(f"   当前用户: {report_user}")
+            print(f"   举报类型: {reason_text}")
+            print("\n2. 🔄 举报新的用户")
+            print("\n3. ❌ 退出程序")
+            print("="*50)
+            
+            while True:
+                choice = await get_user_input("\n请输入您的选择(1-3): ")
+                if choice in ['1', '2', '3']:
+                    break
+                print("❌ 无效的选择，请重新输入")
+            
+            if choice == '3':
+                print("\n✨ 感谢使用，程序即将退出...")
+                await asyncio.sleep(1)
                 break
-            
-            print("\n已用完所有账号，开始重新使用账号继续举报...")
-            await asyncio.sleep(1)
-        
-        print(f"\n举报任务完成，总计成功举报 {success_count} 次")
-        
-    except Exception as e:
-        print(f"程序执行出错: {str(e)}")
+            elif choice == '2':
+                print("\n🔄 切换到新用户举报...")
+                await asyncio.sleep(1)
+                del report_user  # 删除当前用户信息，触发重新输入
+                continue
+            else:  # choice == '1'
+                print(f"\n⭐ 继续举报用户: {report_user}")
+                print(f"当前举报类型: {reason_text}")
+                continue  # 直接继续使用当前用户信息
+                
+        except Exception as e:
+            print(f"\n❌ 程序执行出错: {str(e)}")
+            choice = await get_user_input("\n是否要继续？(y/n): ")
+            if choice.lower() != 'y':
+                break
 
 if __name__ == "__main__":
     asyncio.run(main())
